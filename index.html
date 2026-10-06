@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>بطولة الألعاب</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&family=Lalezar&family=Reem+Kufi&family=Tajawal:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="hero">
+  <h1>بطولة الألعاب</h1>
+  <p>سجّل اسمك، اصعد المستويات، وخلّي اسمك أول اللائحة.</p>
+  <div class="lvbar" aria-hidden="true"><i></i></div>
+  <a class="ig" href="https://www.instagram.com/bdllh.nqws" target="_blank" rel="noopener noreferrer">تابع عبدالله أبو ناقوس على انستجرام</a>
+</header>
+
+<main>
+  <section>
+    <h2>سجّل في البطولة</h2>
+    <form id="reg">
+      <input name="name" placeholder="اسمك" maxlength="40" required>
+      <input name="game" placeholder="اللعبة" maxlength="40" required>
+      <input name="contact" placeholder="انستجرام أو رقم للتواصل (اختياري)" maxlength="80">
+      <button>سجّل الآن</button>
+      <p id="msg" role="status"></p>
+    </form>
+  </section>
+
+  <section>
+    <h2>لائحة التحدي</h2>
+    <ol id="board" class="board"></ol>
+  </section>
+
+  <section>
+    <h2>آخر المنشورات</h2>
+    <div id="posts" class="posts"></div>
+  </section>
+</main>
+
+<footer><button id="dot" aria-label="."></button></footer>
+
+<dialog id="admin">
+  <form method="dialog" class="close"><button>إغلاق</button></form>
+  <form id="login">
+    <input type="password" id="pw" placeholder="كلمة السر" autocomplete="current-password">
+    <button>دخول</button>
+    <p id="lmsg" role="status"></p>
+  </form>
+  <div id="panel" hidden>
+    <h3>منشور جديد</h3>
+    <form id="newpost">
+      <input name="title" placeholder="العنوان" maxlength="80" required>
+      <textarea name="body" placeholder="النص" maxlength="1500" required></textarea>
+      <select name="tpl"><option value="neon">قالب نيون</option><option value="fire">قالب نار</option><option value="ice">قالب جليد</option></select>
+      <select name="font"><option>Cairo</option><option>Tajawal</option><option>Lalezar</option><option>Reem Kufi</option></select>
+      <button>انشر</button>
+    </form>
+    <h3>المسجّلون</h3>
+    <div class="scroll"><table id="players"></table></div>
+  </div>
+</dialog>
+<script src="/app.js"></script>
+</body>
+</html>
