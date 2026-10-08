@@ -1,6 +1,6 @@
 {
   "name": "abdullah-chat",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "engines": { "node": ">=18" },
@@ -9,6 +9,7 @@
     "express-rate-limit": "^7.4.0",
     "helmet": "^7.1.1",
     "pg": "^8.12.0",
-    "socket.io": "^4.7.5"
+    "socket.io": "^4.7.5",
+    "web-push": "^3.6.7"
   }
 }
