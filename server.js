@@ -35,8 +35,11 @@ app.use((q, r, n) => { // صلاحيات المتصفح + حماية CSRF (أي 
 });
 app.use(express.json({ limit: '20kb' }));
 app.use('/api', (_q, r, n) => { r.set('Cache-Control', 'no-store'); n(); });
+app.use(['/api/signup', '/api/login', '/api/login/code', '/api/google', '/api/google/username', '/api/recover'],
+  (q, r, n) => bandev.has(ck(q, 'dv')) ? r.status(403).json({ error: 'هذا الجهاز محظور. تقدر تتواصل مع الإدارة من شاشة الدخول' }) : n());
 
 const online = new Map(), calls = new Map(), answered = new Set(), timers = new Map(), hits = new Map(), xfer = new Map(), fails = new Map();
+const bandev = new Set(); // الأجهزة المحظورة (بتنحمّل من القاعدة عند التشغيل)
 const callerOf = new Map(), callHits = new Map(), pairLast = new Map(), typed = new Map(), uploading = new Set();
 
 const hmac = p => crypto.createHmac('sha256', SECRET).update(p).digest('hex');
@@ -82,7 +85,7 @@ const CO = { httpOnly: true, secure: true, sameSite: 'strict', maxAge: 31536e6 }
 const sess = (r, a, dv) => r.clearCookie('lo', { httpOnly: true, secure: true, sameSite: 'strict' }).cookie('dv', dv, CO).cookie('sid', ssign(a.id, a.tv || 0), { ...CO, maxAge: 6048e5 });
 const getAcc = async q => { const t = sread(ck(q, 'sid')); if (!t || !t.id) return null;
   const a = (await db.query('select * from accounts where id=$1', [t.id])).rows[0];
-  return a && !a.banned && a.device && (a.tv || 0) === t.tv && safeEq(a.device, ck(q, 'dv')) ? a : null; };
+  return a && !a.banned && a.device && !bandev.has(a.device) && (a.tv || 0) === t.tv && safeEq(a.device, ck(q, 'dv')) ? a : null; };
 const member = async (q, r, n) => { const a = await getAcc(q); if (!a) return r.status(401).json({ error: 'سجّل دخولك أول' }); q.acc = a; n(); };
 const blocked = async (a, b) => (await db.query('select 1 from blocks where (a=$1 and b=$2) or (a=$2 and b=$1)', [a, b])).rowCount > 0;
 const devCount = async d => (await db.query('select count(*)::int c from accounts where device=$1', [d])).rows[0].c;
@@ -150,6 +153,13 @@ async function init() {
     alter table reports add column if not exists evidence text;
     alter table reports add column if not exists evidence_files text;
     create table if not exists settings(k text primary key, v text not null);
+    create table if not exists banned_devices(dv text primary key, note text, created_at timestamptz default now());
+    create table if not exists tickets(id serial primary key, code text unique not null, username text, device text, acct_id int,
+    dev_match boolean default false, status text default 'open', created_at timestamptz default now(), updated_at timestamptz default now());
+    create table if not exists ticket_msgs(id serial primary key, ticket_id int not null, from_admin boolean not null default false,
+    body text not null, created_at timestamptz default now());
+    create index if not exists ticket_msgs_t on ticket_msgs(ticket_id);
+    create index if not exists tickets_dev on tickets(device);
     create index if not exists blocks_b on blocks(b);
     create index if not exists msgs_to_unseen on msgs(to_id,from_id) where not seen;
     create index if not exists msgs_created on msgs(created_at);
@@ -160,6 +170,7 @@ async function init() {
     for (const x of rows) { if (x.ukey || !x.username) continue; const k = canon(x.username); if (used.has(k)) continue; used.add(k);
       await db.query('update accounts set ukey=$1 where id=$2', [k, x.id]).catch(e => console.error(e)); }
   }
+  (await db.query('select dv from banned_devices')).rows.forEach(x => bandev.add(x.dv));
   if (!SECRET) { // إذا ما حطيت SECRET بالبيئة، بنخزّنه بقاعدة البيانات عشان ما يتغيّر مع كل تشغيل
     await db.query("insert into settings(k,v) values('secret',$1) on conflict do nothing", [crypto.randomBytes(32).toString('hex')]);
     SECRET = (await db.query("select v from settings where k='secret'")).rows[0].v;
@@ -172,6 +183,8 @@ async function init() {
   setInterval(() => {
     for (const t of ['msgs', 'files']) db.query(`delete from ${t} where created_at < now() - interval '90 days'`).catch(e => console.error(e));
     db.query("delete from statuses where created_at < now() - interval '24 hours'").catch(e => console.error(e));
+    db.query("delete from ticket_msgs where ticket_id in (select id from tickets where updated_at < now() - interval '60 days')")
+      .then(() => db.query("delete from tickets where updated_at < now() - interval '60 days'")).catch(e => console.error(e));
   }, 3600e3).unref();
   setInterval(() => { for (const [k, v] of xfer) if (Date.now() > v.exp) xfer.delete(k); }, 600e3).unref();
   setInterval(() => { const now = Date.now();
@@ -234,6 +247,7 @@ app.get('/api/username', lim(40, 10), async (q, r) => {
   r.json(t ? { ok: false, msg: 'مأخوذ، اختر غيره' } : { ok: true, msg: 'متاح' });
 });
 app.post('/api/signup', lim(6, 60), async (q, r) => {
+  if (GID) return r.status(403).json({ error: 'التسجيل الجديد بس بحساب جوجل. اضغط «المتابعة بحساب جوجل»' });
   const { username, pass, adult } = q.body || {};
   if (!adult) return r.status(400).json({ error: 'لازم تأكد إن عمرك 18 سنة أو أكثر' });
   if (!unOk(username)) return r.status(400).json({ error: 'اسم المستخدم من 3 إلى 20 حرف: حروف وأرقام و _ . فقط' });
@@ -259,7 +273,7 @@ app.post('/api/login', lim(15, 15), async (q, r) => {
   if (!a.pass_hash.startsWith('v2$')) db.query('update accounts set pass_hash=$1 where id=$2', [await hashPw(pw), a.id]).catch(e => console.error(e));
   let dv = ck(q, 'dv'); if (!DVRE.test(dv)) dv = '';
   if (a.device && !safeEq(a.device, dv)) { // جهاز جديد: بنرسل كود للجهاز القديم لازم يكتبه هون
-    if (!online.has(a.id)) return r.status(403).json({ error: 'هذا الحساب مرتبط بجهاز ثاني. افتح الموقع على جهازك القديم وجرّب مرة ثانية، وبيوصلك كود' });
+    if (!online.has(a.id)) return r.status(403).json({ error: 'هذا الحساب مرتبط بجهاز ثاني. افتح الموقع على جهازك القديم وجرّب مرة ثانية، وبيوصلك كود. ولو ما معك الجهاز القديم اضغط «تواصل مع الإدارة»' });
     if (dv && await devCount(dv) >= 2) return r.status(403).json({ error: 'هالجهاز عليه حسابين، ما بتقدر تضيف ثالث' });
     let x = xfer.get(a.id); // لو في كود شغّال ما نبدّله (عشان محاولة ثانية ما تلغي كود صاحب الحساب)
     if (!x || Date.now() > x.exp) { x = { code: rnd(6, '0123456789'), exp: Date.now() + 3e5, tries: 0 }; xfer.set(a.id, x); }
@@ -302,7 +316,7 @@ app.get('/api/recover/list', lim(15, 60), async (q, r) => {
 });
 app.post('/api/recover', lim(8, 60), async (q, r) => {
   const { username, pass } = q.body || {}, dv = ck(q, 'dv');
-  if (ck(q, 'lo')) return r.status(403).json({ error: 'سجّلت خروج من هالجهاز، فعشان أمان حسابك استعادة كلمة السر لازم تكون من الإدارة' });
+  if (ck(q, 'lo')) return r.status(403).json({ error: 'سجّلت خروج من هالجهاز، فعشان أمان حسابك استعادة كلمة السر لازم تكون من الإدارة. اضغط «تواصل مع الإدارة»' });
   if (!DVRE.test(dv) || !str(username, 30)) return r.status(404).json({ error: 'هذا الجهاز مو معروف. اطلب من الإدارة تعمل لك إعادة ضبط' });
   const a = (await db.query('select * from accounts where device=$1 and google_sub is null and lower(username)=lower($2)', [dv, username.trim()])).rows[0];
   if (!a) return r.status(404).json({ error: 'هذا الحساب مو على هالجهاز' });
@@ -507,6 +521,37 @@ app.delete('/api/me', member, lim(5, 60), async (q, r) => {
   r.clearCookie('sid', { httpOnly: true, secure: true, sameSite: 'strict' }).cookie('lo', '1', CO); r.json({ ok: true });
 });
 
+/* ---------- طلبات الدعم: المستخدم يكتب مشكلته (حتى لو نسي كلمة السر) والإدارة ترد ---------- */
+const TKRE = /^[A-Z0-9]{10}$/;
+const tkGet = async code => { code = String(code || '').trim().toUpperCase(); return TKRE.test(code) ? (await db.query('select id,status from tickets where code=$1', [code])).rows[0] : null; };
+app.post('/api/support', lim(5, 60), async (q, r) => {
+  const { username, message } = q.body || {};
+  if (!str(message, 1000)) return r.status(400).json({ error: 'اكتب مشكلتك (حتى 1000 حرف)' });
+  let dv = ck(q, 'dv'); if (!DVRE.test(dv)) dv = null;
+  if (dv && (await db.query("select count(*)::int c from tickets where device=$1 and status='open'", [dv])).rows[0].c >= 3)
+    return r.status(429).json({ error: 'عندك طلبات مفتوحة كثيرة، استنى رد الإدارة' });
+  const un = typeof username === 'string' ? username.trim().slice(0, 30) : '';
+  const acct = un ? (await db.query('select id,device from accounts where lower(username)=lower($1)', [un])).rows[0] : null;
+  const dm = !!(acct && acct.device && dv && safeEq(acct.device, dv)); // هل الطلب جاي من نفس الجهاز المسجّل للحساب؟
+  const code = rnd(10, AL);
+  const t = (await db.query('insert into tickets(code,username,device,acct_id,dev_match) values($1,$2,$3,$4,$5) returning id', [code, un || null, dv, acct ? acct.id : null, dm])).rows[0];
+  await db.query('insert into ticket_msgs(ticket_id,from_admin,body) values($1,false,$2)', [t.id, message.trim()]);
+  r.json({ code });
+});
+app.get('/api/support/:code', lim(60, 15), async (q, r) => {
+  const t = await tkGet(q.params.code); if (!t) return r.status(404).json({ error: 'كود الطلب غلط أو انحذف' });
+  r.json({ status: t.status, msgs: (await db.query('select from_admin,body,created_at t from ticket_msgs where ticket_id=$1 order by id', [t.id])).rows });
+});
+app.post('/api/support/:code/reply', lim(20, 60), async (q, r) => {
+  const t = await tkGet(q.params.code); if (!t) return r.status(404).json({ error: 'كود الطلب غلط أو انحذف' });
+  const body = (q.body || {}).body;
+  if (!str(body, 1000)) return r.status(400).json({ error: 'اكتب الرد' });
+  if (t.status === 'closed') return r.status(403).json({ error: 'الطلب مسكّر، افتح طلب جديد' });
+  if ((await db.query('select count(*)::int c from ticket_msgs where ticket_id=$1', [t.id])).rows[0].c >= 40) return r.status(429).json({ error: 'كثرت الرسائل بهالطلب' });
+  await db.query('insert into ticket_msgs(ticket_id,from_admin,body) values($1,false,$2)', [t.id, body.trim()]);
+  await db.query('update tickets set updated_at=now() where id=$1', [t.id]); r.json({ ok: true });
+});
+
 /* ---------- الإدارة ---------- */
 const AR = '٠١٢٣٤٥٦٧٨٩', FA = '۰۱۲۳۴۵۶۷۸۹';
 const normPw = v => String(v).replace(/[٠-٩]/g, d => AR.indexOf(d)).replace(/[۰-۹]/g, d => FA.indexOf(d)).replace(/[\u200B-\u200F\u202A-\u202E\uFEFF]/g, '').trim(); // يقبل الأرقام العربية وأي مسافات مخفية
@@ -518,7 +563,7 @@ app.post('/api/admin/login', lim(15, 15), (q, r) => {
   r.json({ token: sign(Date.now() + 3600000) });
 });
 app.get('/api/admin/data', auth, async (_q, r) => {
-  const accounts = (await db.query(`select id,username,${nm} name,coalesce(banned,false) banned,claimed_at from accounts order by id desc limit 1000`)).rows;
+  const accounts = (await db.query(`select id,username,${nm} name,coalesce(banned,false) banned,claimed_at,coalesce(device in (select dv from banned_devices),false) dban from accounts order by id desc limit 1000`)).rows;
   const reports = (await db.query(`select r.id,r.reason,r.to_id,(r.evidence is not null) ev,
     coalesce(a.name,a.username) fname, coalesce(b.name,b.username) tname, coalesce(b.banned,false) banned
     from reports r join accounts a on a.id=r.from_id join accounts b on b.id=r.to_id order by r.id desc limit 100`)).rows;
@@ -553,6 +598,39 @@ app.post('/api/admin/reset/:id', auth, async (q, r) => {
   io.in('u:' + id).disconnectSockets(true); r.json({ pass: p });
 });
 app.delete('/api/admin/reports/:id', auth, async (q, r) => { await db.query('delete from reports where id=$1', [idp(q.params.id)]); r.json({ ok: true }); });
+
+app.get('/api/admin/tickets', auth, async (_q, r) => r.json((await db.query(`select t.id,t.username,t.status,t.dev_match,t.acct_id,t.updated_at,
+  coalesce((select not m.from_admin from ticket_msgs m where m.ticket_id=t.id order by m.id desc limit 1),false) waiting
+  from tickets t order by (t.status='open') desc, t.updated_at desc limit 200`)).rows));
+app.get('/api/admin/ticket/:id', auth, async (q, r) => {
+  const id = idp(q.params.id);
+  const t = (await db.query('select id,username,status,dev_match,acct_id from tickets where id=$1', [id])).rows[0];
+  if (!t) return r.sendStatus(404);
+  r.json({ ...t, msgs: (await db.query('select from_admin,body,created_at t from ticket_msgs where ticket_id=$1 order by id', [id])).rows });
+});
+app.post('/api/admin/ticket/:id/reply', auth, async (q, r) => {
+  const id = idp(q.params.id), body = String((q.body || {}).body || '').trim().slice(0, 1000), close = !!(q.body || {}).close;
+  if (!id || (!body && !close)) return r.sendStatus(400);
+  if (!(await db.query('select 1 from tickets where id=$1', [id])).rowCount) return r.sendStatus(404);
+  if (body) await db.query('insert into ticket_msgs(ticket_id,from_admin,body) values($1,true,$2)', [id, body]);
+  await db.query('update tickets set status=$2, updated_at=now() where id=$1', [id, close ? 'closed' : 'open']); r.json({ ok: true });
+});
+app.delete('/api/admin/ticket/:id', auth, async (q, r) => {
+  const id = idp(q.params.id); if (!id) return r.sendStatus(400);
+  await db.query('delete from ticket_msgs where ticket_id=$1', [id]); await db.query('delete from tickets where id=$1', [id]); r.json({ ok: true });
+});
+// حظر / فك حظر الجهاز: كل الحسابات على هالجهاز بتنحظر، وما بيقدر يسجّل أو يدخل منه
+app.post('/api/admin/device/:id', auth, async (q, r) => {
+  const id = idp(q.params.id), on = !!(q.body || {}).on; if (!id) return r.sendStatus(400);
+  const a = (await db.query('select username,device from accounts where id=$1', [id])).rows[0];
+  if (!a || !a.device) return r.status(400).json({ error: 'هذا الحساب ما إله جهاز مسجّل' });
+  const ids = (await db.query('select id from accounts where device=$1', [a.device])).rows.map(x => x.id);
+  if (on) { await db.query('insert into banned_devices(dv,note) values($1,$2) on conflict do nothing', [a.device, a.username]); bandev.add(a.device); }
+  else { await db.query('delete from banned_devices where dv=$1', [a.device]); bandev.delete(a.device); }
+  await db.query('update accounts set banned=$1 where device=$2', [on, a.device]);
+  if (on) ids.forEach(x => io.in('u:' + x).disconnectSockets(true));
+  r.json({ ok: true, accounts: ids.length });
+});
 
 /* ---------- الاتصال المباشر (رسائل + إشارات المكالمات) ---------- */
 const endPair = (a, b) => {
@@ -674,11 +752,11 @@ const HTML = `<!doctype html>
     <a href="https://arb-ai-x.github.io/arabesque-de/" target="_blank" rel="noopener noreferrer">موقع أربكس البرمجة</a>
   </div>
   <div id="auth" class="glass">
-    <div id="tabs" class="tabs"><button type="button" id="tl" class="tab on">دخول</button><button type="button" id="ts" class="tab">حساب جديد</button></div>
+    <div id="tabs" class="tabs"><button type="button" id="tl" class="tab on">دخول</button><button type="button" id="ts" class="tab" hidden>حساب جديد</button></div>
     <div id="gwrap" hidden><div id="gbtn"></div><p class="hintp">أو بالاسم وكلمة السر:</p></div>
     <form id="lg"><input name="username" placeholder="اسم المستخدم" maxlength="30" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" required>
       <input name="pass" type="password" placeholder="كلمة السر" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="40" required>
-      <button>دخول</button><p id="lgmsg" role="status"></p><button type="button" id="fg" class="lnk">نسيت كلمة السر</button></form>
+      <button>دخول</button><p id="lgmsg" role="status"></p><button type="button" id="fg" class="lnk">نسيت كلمة السر</button> <button type="button" id="hp" class="lnk">تواصل مع الإدارة</button></form>
     <form id="su" hidden><input id="suu" name="username" placeholder="اختر اسم مستخدم" maxlength="20" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required>
       <p id="unmsg" role="status"></p>
       <input name="pass" type="password" placeholder="اختر كلمة سر (8 أحرف على الأقل)" autocomplete="new-password" maxlength="40" required>
@@ -697,6 +775,13 @@ const HTML = `<!doctype html>
       <p id="gunmsg" role="status"></p>
       <label class="chk"><input type="checkbox" name="adult"> أؤكد أن عمري 18 سنة أو أكثر وألتزم بقواعد الموقع</label>
       <button>متابعة</button> <button type="button" id="gux" class="lnk">رجوع</button><p id="gumsg" role="status"></p></form>
+    <form id="sp" hidden><p>اكتب مشكلتك (نسيت كلمة السر، حسابك محظور، فقدت جهازك...) وبترد عليك الإدارة.</p>
+      <input name="username" placeholder="اسم المستخدم (إذا بتتذكره)" maxlength="30" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <textarea name="message" rows="4" maxlength="1000" placeholder="اشرح مشكلتك" required></textarea>
+      <button>إرسال للإدارة</button> <button type="button" id="spo" class="lnk">عندي كود طلب</button> <button type="button" id="spx" class="lnk">رجوع</button><p id="spmsg" role="status"></p></form>
+    <div id="spt" hidden><p>كود طلبك (احتفظ فيه): <b id="spc"></b></p><p id="sps" class="hintp"></p><div id="spm"></div>
+      <textarea id="spr" rows="3" maxlength="1000" placeholder="اكتب ردك"></textarea>
+      <button type="button" id="sprb">إرسال</button> <button type="button" id="spre" class="lnk">تحديث</button> <button type="button" id="spn" class="lnk">طلب جديد</button> <button type="button" id="sptx" class="lnk">رجوع</button><p id="sptm" role="status"></p></div>
   </div>
 </section>
 <section id="app" hidden>
@@ -756,7 +841,7 @@ const HTML = `<!doctype html>
   <button id="dot" aria-label="."></button></footer>
 <dialog id="admin"><form method="dialog"><button>إغلاق</button></form>
 <form id="alogin"><input type="password" id="pw" placeholder="كلمة السر" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false"><button>دخول</button><p id="amsg" role="status"></p></form>
-<div id="panel" hidden><div id="evbox" hidden></div><h3>البلاغات</h3><div class="scroll"><table id="reps"></table></div>
+<div id="panel" hidden><div id="evbox" hidden></div><div id="tkbox" hidden></div><h3>طلبات الدعم <small id="tcnt"></small></h3><div class="scroll"><table id="tkt"></table></div><h3>البلاغات</h3><div class="scroll"><table id="reps"></table></div>
 <h3>الحسابات <small id="cnt"></small></h3><div class="scroll"><table id="accs"></table></div></div></dialog>
 <script src="/socket.io/socket.io.js"></script><script src="/app.js"></script></body></html>`;
 
@@ -866,7 +951,10 @@ table{width:100%;border-collapse:collapse;font-size:.9rem}td,th{padding:6px 8px;
 @media (max-width:700px){#app{grid-template-columns:1fr}body.chatting aside{display:none}body:not(.chatting) #chat{display:none}#back{display:block}.m{max-width:85%}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important}h1{color:var(--g);background:none}}
 #gwrap{display:flex;flex-direction:column;align-items:center;margin-bottom:10px}#tabs[hidden]~#gwrap{display:none!important}
-.rd{color:#19e3ff;font-weight:700}#bl .row span{flex:1}#older{width:100%;border-radius:0;margin:0}
+.rd{color:#19e3ff;font-weight:700}
+.sm{background:#ffffff14;border-radius:12px;padding:8px 12px;margin:6px 0;text-align:right;overflow-wrap:anywhere}.sm.adm{background:linear-gradient(135deg,var(--b2),var(--m))}
+.sm small{display:block;opacity:.7;font-size:.7rem}#spm,#tkbox .spm{max-height:240px;overflow:auto}#spc{letter-spacing:.15em;color:var(--g)}
+#tkbox{border:1px solid #ffffff2a;border-radius:12px;padding:10px;margin-bottom:12px}#bl .row span{flex:1}#older{width:100%;border-radius:0;margin:0}
 .m .del{background:none;color:inherit;opacity:.6;padding:0 6px;font-size:.7rem;margin-inline-start:6px;display:inline}
 #evbox{border:1px solid #ffffff2a;border-radius:12px;padding:10px;margin-bottom:12px}#evbox>div{margin:8px 0}
 #evbox pre{white-space:pre-wrap;text-align:right;background:#ffffff0d;padding:8px;border-radius:10px;overflow-wrap:anywhere}`;
@@ -1079,7 +1167,7 @@ async function enter(){me=await api('/me');members=await api('/members');
   if(!sock){sock=io();wire()}pushSub(false).catch(()=>{})}
 
 /* تسجيل ودخول */
-function tab(w){$('#lg').hidden=w!=='l';$('#su').hidden=w!=='s';$('#cd').hidden=true;$('#rc').hidden=true;$('#gu').hidden=true;$('#tabs').hidden=false;
+function tab(w){$('#lg').hidden=w!=='l';$('#su').hidden=w!=='s';$('#cd').hidden=true;$('#rc').hidden=true;$('#gu').hidden=true;$('#sp').hidden=true;$('#spt').hidden=true;$('#tabs').hidden=false;
   $('#tl').classList.toggle('on',w==='l');$('#ts').classList.toggle('on',w==='s')}
 $('#tl').onclick=()=>tab('l');$('#ts').onclick=()=>tab('s');
 let ut=0;$('#suu').oninput=()=>{clearTimeout(ut);const v=$('#suu').value.trim(),m=$('#unmsg');m.className='';if(!v){m.textContent='';return}
@@ -1095,7 +1183,7 @@ $('#cd').onsubmit=async e=>{e.preventDefault();
   try{await api('/login/code','POST',{username:cred.username,pass:cred.pass,code:e.target.code.value.trim()});await enter()}catch(x){$('#cdmsg').textContent=x.message}};
 $('#cdx').onclick=()=>location.reload();
 $('#fg').onclick=async()=>{try{const d=await api('/recover/list');
-  if(!d.names.length){$('#lgmsg').textContent=d.locked?'سجّلت خروج من هالجهاز، فعشان أمان حسابك استعادة كلمة السر لازم تكون من الإدارة':'ما في حساب مسجّل على هالجهاز. اطلب من الإدارة إعادة ضبط';return}
+  if(!d.names.length){$('#lgmsg').textContent=d.locked?'سجّلت خروج من هالجهاز، فعشان أمان حسابك استعادة كلمة السر لازم تكون من الإدارة. اضغط «تواصل مع الإدارة»':'ما في حساب مسجّل على هالجهاز. اضغط «تواصل مع الإدارة»';return}
   $('#rcsel').replaceChildren(...d.names.map(n=>{const o=el('option','',n);o.value=n;return o}));$('#lg').hidden=true;$('#tabs').hidden=true;$('#rc').hidden=false}
   catch(x){$('#lgmsg').textContent=x.message}};
 $('#rcx').onclick=()=>tab('l');
@@ -1113,12 +1201,30 @@ async function gcb(resp){try{const d=await api('/google','POST',{credential:resp
   await new Promise((ok,no)=>{const s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';s.async=true;s.onload=ok;s.onerror=no;document.head.append(s)});
   google.accounts.id.initialize({client_id:c.google,callback:gcb,ux_mode:'popup'});
   google.accounts.id.renderButton($('#gbtn'),{theme:'filled_black',size:'large',text:'continue_with',shape:'pill',locale:'ar',width:300});
-  $('#gwrap').hidden=false}catch(x){}})();
+  $('#gwrap').hidden=false;$('#ts').hidden=true}catch(x){}})();
 let gt=0;$('#guu').oninput=()=>{clearTimeout(gt);const v=$('#guu').value.trim(),m=$('#gunmsg');m.className='';if(!v){m.textContent='';return}
   gt=setTimeout(async()=>{try{const d=await api('/username?u='+encodeURIComponent(v));if($('#guu').value.trim()!==v)return;m.textContent=d.msg;m.className=d.ok?'good':'bad'}catch(x){m.textContent=x.message}},400)};
 $('#gu').onsubmit=async e=>{e.preventDefault();const f=e.target;
   try{await api('/google/username','POST',{ticket:gtk,username:f.username.value.trim(),adult:f.adult.checked});await enter()}catch(x){$('#gumsg').textContent=x.message}};
 $('#gux').onclick=()=>location.reload();
+
+/* طلبات الدعم */
+let sk='';try{sk=localStorage.getItem('tk')||''}catch(e){}
+const saveTk=c=>{sk=c;try{if(c)localStorage.setItem('tk',c);else localStorage.removeItem('tk')}catch(e){}};
+function spShow(w){['#lg','#su','#cd','#rc','#gu','#sp','#spt'].forEach(x=>$(x).hidden=true);$('#tabs').hidden=true;$(w).hidden=false}
+async function loadTk(){try{const d=await api('/support/'+sk);$('#spc').textContent=sk;
+  $('#sps').textContent=d.status==='closed'?'الطلب مسكّر':'الطلب مفتوح. ارجع وحدّث لتشوف رد الإدارة';
+  $('#spm').replaceChildren(...d.msgs.map(m=>{const e=el('div','sm'+(m.from_admin?' adm':''),m.body);e.append(el('small','',(m.from_admin?'الإدارة':'أنت')+' - '+tm(m.created_at)));return e}));
+  $('#sprb').disabled=d.status==='closed';$('#sptm').textContent=''}
+  catch(x){saveTk('');spShow('#sp');$('#spmsg').textContent=x.message}}
+$('#hp').onclick=()=>{if(sk){spShow('#spt');loadTk()}else spShow('#sp')};
+$('#spx').onclick=()=>tab('l');$('#sptx').onclick=()=>tab('l');
+$('#spn').onclick=()=>{saveTk('');spShow('#sp')};
+$('#spo').onclick=()=>{const c=(prompt('اكتب كود الطلب')||'').trim().toUpperCase();if(!c)return;saveTk(c);spShow('#spt');loadTk()};
+$('#sp').onsubmit=async e=>{e.preventDefault();const f=e.target;
+  try{const d=await api('/support','POST',{username:f.username.value.trim(),message:f.message.value});saveTk(d.code);f.message.value='';spShow('#spt');await loadTk()}catch(x){$('#spmsg').textContent=x.message}};
+$('#sprb').onclick=async()=>{const v=$('#spr').value.trim();if(!v)return;try{await api('/support/'+sk+'/reply','POST',{body:v});$('#spr').value='';await loadTk()}catch(x){$('#sptm').textContent=x.message}};
+$('#spre').onclick=loadTk;
 
 const row=(c,act,h)=>{const tr=el('tr');c.forEach(x=>tr.append(el(h?'th':'td','',x)));if(act)tr.append(act);return tr};
 async function adm(){const d=await api('/admin/data');$('#cnt').textContent='('+d.accounts.length+' من '+d.max+' - أونلاين: '+d.online+' - ملفات: '+d.mb+' ميغا)';
@@ -1132,7 +1238,11 @@ async function adm(){const d=await api('/admin/data');$('#cnt').textContent='('+
   d.accounts.forEach(x=>{const t=el('td'),b=el('button','',x.banned?'فك الحظر':'حظر'),rs=el('button','','إعادة ضبط');
     b.onclick=safe(async()=>{await api('/admin/ban/'+x.id,'POST',{on:!x.banned});await adm()});
     rs.onclick=safe(async()=>{if(!confirm('إعادة ضبط '+x.username+'؟'))return;const r=await api('/admin/reset/'+x.id,'POST');alert(x.username+' : '+r.pass);await adm()});
-    t.append(b,rs);ac2.append(row([x.username,x.name,x.banned?'محظور':(x.claimed_at?'مستخدم':'متاح')],t))})}
+    const dv2=el('button','',x.dban?'فك حظر الجهاز':'حظر الجهاز');
+    dv2.onclick=safe(async()=>{if(!confirm((x.dban?'فك حظر':'حظر')+' جهاز '+x.username+'؟ بيشمل كل الحسابات على نفس الجهاز'))return;
+      const r=await api('/admin/device/'+x.id,'POST',{on:!x.dban});alert('تم. عدد الحسابات على الجهاز: '+r.accounts);await adm()});
+    t.append(b,rs,dv2);ac2.append(row([x.username,x.name,x.banned?(x.dban?'محظور (الجهاز)':'محظور'):(x.claimed_at?'مستخدم':'متاح')],t))});
+  await loadTks()}
 async function showEv(id){const d=await api('/admin/report/'+id),b=$('#evbox');b.replaceChildren(el('h3','','الأدلة'),el('pre','',d.evidence));
   for(const f of d.files||[]){const r=await fetch('/api/admin/file/'+f,{headers:{Authorization:'Bearer '+token}});
     if(!r.ok){b.append(el('p','mut','الملف '+f+' غير موجود (انحذف)'));continue}
@@ -1140,6 +1250,27 @@ async function showEv(id){const d=await api('/admin/report/'+id),b=$('#evbox');b
     m.src=u;if(t!=='image')m.controls=true;const x=el('button','','حذف الملف');
     x.onclick=safe(async()=>{if(!confirm('حذف هالملف نهائياً؟'))return;await api('/admin/file/'+f,'DELETE');w.remove()});w.append(m,x);b.append(w)}
   const c=el('button','alt','إغلاق');c.onclick=()=>{b.hidden=true};b.append(c);b.hidden=false;b.scrollIntoView()}
+async function loadTks(){const d=await api('/admin/tickets'),t=$('#tkt');
+  $('#tcnt').textContent='('+d.filter(x=>x.waiting&&x.status==='open').length+' بانتظار ردك)';
+  t.replaceChildren(row(['المستخدم','الجهاز','الحالة','آخر نشاط',''],null,true));
+  d.forEach(x=>{const td=el('td'),b=el('button','','فتح');b.onclick=safe(()=>showTk(x.id));td.append(b);
+    t.append(row([x.username||'-',x.acct_id?(x.dev_match?'نفس جهاز الحساب':'جهاز مختلف'):'-',x.status==='closed'?'مغلق':(x.waiting?'بانتظار ردك':'تم الرد'),ago(x.updated_at)],td))})}
+async function showTk(id){const d=await api('/admin/ticket/'+id),b=$('#tkbox');
+  b.replaceChildren(el('h3','','طلب من: '+(d.username||'بدون اسم')),
+    el('p','hintp',d.acct_id?(d.dev_match?'الطلب جاء من نفس الجهاز المسجّل للحساب':'الطلب جاء من جهاز مختلف عن المسجّل للحساب (تأكد إنه صاحب الحساب)'):'الاسم مو موجود أو ما انكتب'));
+  const box=el('div','spm');d.msgs.forEach(m=>{const e=el('div','sm'+(m.from_admin?' adm':''),m.body);e.append(el('small','',(m.from_admin?'الإدارة':'المستخدم')+' - '+ago(m.t)+' مضت'));box.append(e)});
+  const ta=el('textarea');ta.rows=3;ta.maxLength=1000;ta.placeholder='اكتب الرد';
+  const done=async()=>{await showTk(id);await loadTks()};
+  const s1=el('button','','إرسال الرد'),s2=el('button','alt','إرسال وإغلاق'),cl=el('button','alt','إخفاء'),dl=el('button','alt','حذف الطلب');
+  s1.onclick=safe(async()=>{if(!ta.value.trim())return;await api('/admin/ticket/'+id+'/reply','POST',{body:ta.value});await done()});
+  s2.onclick=safe(async()=>{await api('/admin/ticket/'+id+'/reply','POST',{body:ta.value,close:true});await done()});
+  dl.onclick=safe(async()=>{if(!confirm('حذف الطلب؟'))return;await api('/admin/ticket/'+id,'DELETE');b.hidden=true;await loadTks()});
+  cl.onclick=()=>{b.hidden=true};
+  b.append(box,ta,s1,s2);
+  if(d.acct_id){const rs=el('button','alt','إعادة ضبط الحساب');
+    rs.onclick=safe(async()=>{if(!confirm('إعادة ضبط حساب '+d.username+'؟ بتتغير كلمة سره وبيطلع من كل الأجهزة'))return;
+      const r=await api('/admin/reset/'+d.acct_id,'POST');ta.value='تم إعادة ضبط حسابك. كلمة السر المؤقتة: '+r.pass+' - ادخل فيها وغيّرها من الإعدادات.'});b.append(rs)}
+  b.append(dl,cl);b.hidden=false;b.scrollIntoView()}
 let clicks=0,timer;
 $('#dot').addEventListener('click',()=>{clearTimeout(timer);timer=setTimeout(()=>clicks=0,3000);if(++clicks>=10){clicks=0;$('#admin').showModal()}});
 $('#alogin').addEventListener('submit',async e=>{e.preventDefault();
