@@ -21,6 +21,7 @@ for (const m of ['get', 'post', 'put', 'delete']) {
 }
 
 app.set('trust proxy', 1);
+require('./pwa-extra')(app);
 app.use(helmet({ contentSecurityPolicy: { directives: {
   defaultSrc: ["'self'"], scriptSrc: ["'self'"], imgSrc: ["'self'", 'blob:'], connectSrc: ["'self'", 'wss:'], mediaSrc: ["'self'", 'blob:'],
   styleSrc: ["'self'", 'https://fonts.googleapis.com'], fontSrc: ['https://fonts.gstatic.com'], workerSrc: ["'self'"], manifestSrc: ["'self'"] } } }));
