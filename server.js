@@ -1,4 +1,4 @@
-// أربكس الدردشة: دردشة ومكالمات بين الأعضاء (ملف واحد)
+// عبدالله ابو ناقوس : دردشة ومكالمات بين الأعضاء (ملف واحد)
 // تم انشاء الموقع بواسطة اربكس الدردشة 
 const express = require('express'), helmet = require('helmet'), rateLimit = require('express-rate-limit');
 const crypto = require('crypto'), http = require('http'), { Pool } = require('pg'), { Server } = require('socket.io');
