@@ -1,5 +1,5 @@
 // أربكس الدردشة: دردشة ومكالمات بين الأعضاء (ملف واحد)
-// تم إنشاء الموقع بواسطة عبدالله ابو ناقوس
+// تم انشاء الموقع بواسطة اربكس الدردشة 
 const express = require('express'), helmet = require('helmet'), rateLimit = require('express-rate-limit');
 const crypto = require('crypto'), http = require('http'), { Pool } = require('pg'), { Server } = require('socket.io');
 let wp; try { wp = require('web-push'); } catch { console.log('web-push مو منصّب: الإشعارات معطّلة (أضفه لـ package.json)'); }
