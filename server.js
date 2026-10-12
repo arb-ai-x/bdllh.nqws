@@ -509,6 +509,9 @@ const HTML = `<!doctype html>
 <meta name="google-site-verification" content="-ZH8A2zcBXWEltSL4_qjskRG7Bs0gUjzplly7_XwF1M" />
 <meta name="theme-color" content="#07050f"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
 <title>عبدالله ابو ناقوس</title>
+<meta name="description" content="عبدالله ابو ناقوس">
+<meta property="og:site_name" content="عبدالله ابو ناقوس"><meta property="og:title" content="عبدالله ابو ناقوس"><meta property="og:description" content="عبدالله ابو ناقوس">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"عبدالله ابو ناقوس","alternateName":"عبدالله ابو ناقوس","url":"https://bdllh-nqws-1.onrender.com/"}</script>
 <link rel="icon" href="/logo.svg" type="image/svg+xml"><link rel="manifest" href="/manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&family=Lalezar&display=swap" rel="stylesheet">
