@@ -1,5 +1,5 @@
 // عبدالله ابو ناقوس : دردشة ومكالمات بين الأعضاء (ملف واحد)
-// تم انشاء الموقع بواسطة اربكس الدردشة 
+// تم انشاء الموقع بواسطة عبدالله ابو ناقوس 
 const express = require('express'), helmet = require('helmet'), rateLimit = require('express-rate-limit');
 const crypto = require('crypto'), http = require('http'), { Pool } = require('pg'), { Server } = require('socket.io');
 let wp; try { wp = require('web-push'); } catch { console.log('web-push مو منصّب: الإشعارات معطّلة (أضفه لـ package.json)'); }
@@ -99,7 +99,7 @@ const notifyFrom = async (from, to, kind, text) => {
     const subs = (await db.query('select endpoint,p256dh,auth from push_subs where acc=$1', [to])).rows; if (!subs.length) return;
     const n = (await db.query(`select ${nm} n from accounts where id=$1`, [from])).rows[0];
     const body = { image: 'صورة', audio: 'رسالة صوتية', video: 'فيديو' }[kind] || String(text || '').slice(0, 80);
-    const p = JSON.stringify({ kind, from, tag: kind + ':' + from, title: (n && n.n) || 'أربكس الدردشة', body });
+    const p = JSON.stringify({ kind, from, tag: kind + ':' + from, title: (n && n.n) || 'عبدالله ابو ناقوس', body });
     for (const s of subs) wp.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, p,
       { TTL: kind === 'call' ? 30 : 3600, urgency: kind === 'call' ? 'high' : 'normal' })
       .catch(e => { if (e.statusCode === 404 || e.statusCode === 410) db.query('delete from push_subs where endpoint=$1', [s.endpoint]).catch(() => {}); });
@@ -489,7 +489,7 @@ const LOGO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><def
 <circle cx="64" cy="64" r="60" fill="#07050f" stroke="url(#g)" stroke-width="6"/>
 <path d="M38 36h52a12 12 0 0 1 12 12v30a12 12 0 0 1-12 12H72L56 106V90H38a12 12 0 0 1-12-12V48a12 12 0 0 1 12-12z" fill="none" stroke="url(#g)" stroke-width="5" stroke-linejoin="round"/>
 <rect x="60" y="52" width="8" height="30" rx="4" fill="#ffc83d"/><path d="M58 45l12-5" stroke="#ffc83d" stroke-width="5" stroke-linecap="round"/></svg>`;
-const MANIFEST = JSON.stringify({ name: 'أربكس الدردشة', short_name: 'أربكس', start_url: '/', display: 'standalone', dir: 'rtl', lang: 'ar',
+const MANIFEST = JSON.stringify({ name: 'عبدالله ابو ناقوس', short_name: 'عبدالله', start_url: '/', display: 'standalone', dir: 'rtl', lang: 'ar',
   background_color: '#07050f', theme_color: '#07050f', icons: [{ src: '/logo.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }] });
 
 // عامل الخدمة: بيعرض إشعار الجهاز لما توصل رسالة أو مكالمة والموقع مو أمامك
@@ -497,7 +497,7 @@ const SW = `self.addEventListener('push',e=>{let d={};try{d=e.data.json()}catch(
 e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(cs=>{
 if(cs.some(c=>c.visibilityState==='visible'&&c.focused))return;
 const call=d.kind==='call';
-return self.registration.showNotification(d.title||'أربكس الدردشة',{body:d.body||'',tag:d.tag||'x',renotify:true,icon:'/logo.svg',badge:'/logo.svg',
+return self.registration.showNotification(d.title||'عبدالله ابو ناقوس',{body:d.body||'',tag:d.tag||'x',renotify:true,icon:'/logo.svg',badge:'/logo.svg',
 requireInteraction:call,vibrate:call?[300,200,300,200,300]:[120]})}))});
 self.addEventListener('notificationclick',e=>{e.notification.close();
 e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(cs=>{
@@ -508,15 +508,15 @@ const HTML = `<!doctype html>
 <html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="google-site-verification" content="-ZH8A2zcBXWEltSL4_qjskRG7Bs0gUjzplly7_XwF1M" />
 <meta name="theme-color" content="#07050f"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
-<title>أربكس الدردشة</title>
+<title>عبدالله ابو ناقوس</title>
 <link rel="icon" href="/logo.svg" type="image/svg+xml"><link rel="manifest" href="/manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&family=Lalezar&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css"></head><body>
 <div class="bg" aria-hidden="true"><i></i><i></i></div>
 <section id="land" class="hero">
-  <img class="logo" src="/logo.svg" alt="شعار أربكس الدردشة" width="132" height="132">
-  <p class="kicker">أهلاً فيك في</p><h1>أربكس الدردشة</h1>
+  <img class="logo" src="/logo.svg" alt="شعار عبدالله ابو ناقوس" width="132" height="132">
+  <p class="kicker">أهلاً فيك في</p><h1>عبدالله ابو ناقوس</h1>
   <p class="by">تم إنشاء الموقع بواسطة <a href="https://www.instagram.com/bdllh.nqws" target="_blank" rel="noopener noreferrer">عبدالله ابو ناقوس</a></p>
   <p class="sub">دردشة ومكالمات حقيقية بين الأعضاء.</p>
   <a class="ig" href="https://www.instagram.com/bdllh.nqws" target="_blank" rel="noopener noreferrer">تابعني على انستجرام</a>
@@ -546,7 +546,7 @@ const HTML = `<!doctype html>
 </section>
 <section id="app" hidden>
   <aside>
-    <div class="top"><div class="brand"><img src="/logo.svg" alt="" width="34" height="34"><span>أربكس الدردشة</span></div><button id="gear">الإعدادات</button></div>
+    <div class="top"><div class="brand"><img src="/logo.svg" alt="" width="34" height="34"><span>عبدالله ابو ناقوس</span></div><button id="gear">الإعدادات</button></div>
     <button id="me" class="meb"><span id="meav"></span><b id="myname"></b></button>
     <div class="tabs"><button type="button" id="tc" class="tab on">المحادثات</button><button type="button" id="tst" class="tab">الحالات</button></div>
     <div id="onc"></div>
@@ -753,7 +753,7 @@ const bub=m=>{const d=el('div','m'+(m.from_id===me.id?' me':'')),u='/api/file/'+
   else c=el('span','',m.body);
   d.append(c,el('small','t',tm(m.created_at)));return d};
 function list(){const q=$('#q').value.trim().toLowerCase(),n=Object.values(unread).reduce((a,b)=>a+b,0);
-  document.title=(n?'('+n+') ':'')+'أربكس الدردشة';
+  document.title=(n?'('+n+') ':'')+'عبدالله ابو ناقوس';
   $('#onc').textContent='نشط الآن: '+members.filter(m=>on.has(m.id)).length;stat();
   $('#list').replaceChildren(...members.filter(m=>(m.name+' '+m.username+' '+m.bio).toLowerCase().includes(q)).sort((a,b)=>on.has(b.id)-on.has(a.id)).map(m=>{
     const d=el('div','mem'+(m.id===cur?' act':'')),w=el('span','avw'),t=el('span','mt');
@@ -966,5 +966,5 @@ app.use((e, _q, r, _n) => {
 });
 
 init()
-  .then(() => server.listen(process.env.PORT || 3000, () => console.log('أربكس الدردشة شغّال')))
+  .then(() => server.listen(process.env.PORT || 3000, () => console.log('عبدالله ابو ناقوس شغّال')))
   .catch(e => { console.error('فشل التشغيل:', e.message); process.exit(1); });
