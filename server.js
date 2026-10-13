@@ -23,7 +23,7 @@ for (const m of ['get', 'post', 'put', 'delete']) {
 app.set('trust proxy', 1);
 require('./pwa-extra')(app);
 app.use(helmet({ contentSecurityPolicy: { directives: {
-  defaultSrc: ["'self'"], scriptSrc: ["'self'"], imgSrc: ["'self'", 'blob:'], connectSrc: ["'self'", 'wss:'], mediaSrc: ["'self'", 'blob:'],
+  defaultSrc: ["'self'"], scriptSrc: ["'self'", 'https://pagead2.googlesyndication.com'], imgSrc: ["'self'", 'blob:'], connectSrc: ["'self'", 'wss:'], mediaSrc: ["'self'", 'blob:'],
   styleSrc: ["'self'", 'https://fonts.googleapis.com'], fontSrc: ['https://fonts.gstatic.com'], workerSrc: ["'self'"], manifestSrc: ["'self'"] } } }));
 app.use((q, r, n) => { // صلاحيات المتصفح + حماية CSRF (أي طلب تعديل لازم يجي من نفس الموقع)
   r.set('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=(), payment=()');
@@ -507,6 +507,8 @@ for(const c of cs){if('focus' in c)return c.focus()}return self.clients.openWind
 const HTML = `<!doctype html>
 <html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="google-site-verification" content="-ZH8A2zcBXWEltSL4_qjskRG7Bs0gUjzplly7_XwF1M" />
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9488040294768764"
+     crossorigin="anonymous"></script>
 <meta name="theme-color" content="#07050f"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
 <title>عبدالله ابو ناقوس</title>
 <meta name="description" content="عبدالله ابو ناقوس">
