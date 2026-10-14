@@ -1,4 +1,4 @@
-// عبدالله ابو ناقوس : دردشة ومكالمات بين الأعضاء (ملف واحد)
+// عبدالله ابو ناقوس : دردشة ومكالمات بين الأعضاء + أربكس الدليل (ملف واحد)
 // تم انشاء الموقع بواسطة عبدالله ابو ناقوس 
 const express = require('express'), helmet = require('helmet'), rateLimit = require('express-rate-limit');
 const crypto = require('crypto'), http = require('http'), { Pool } = require('pg'), { Server } = require('socket.io');
@@ -23,14 +23,20 @@ for (const m of ['get', 'post', 'put', 'delete']) {
 app.set('trust proxy', 1);
 require('./pwa-extra')(app);
 app.use(helmet({ contentSecurityPolicy: { directives: {
-  defaultSrc: ["'self'"], scriptSrc: ["'self'", 'https://pagead2.googlesyndication.com'], imgSrc: ["'self'", 'blob:'], connectSrc: ["'self'", 'wss:'], mediaSrc: ["'self'", 'blob:'],
+  defaultSrc: ["'self'"],
+  scriptSrc: ["'self'", 'https://pagead2.googlesyndication.com', 'https://*.googlesyndication.com', 'https://*.google.com', 'https://*.doubleclick.net'],
+  imgSrc: ["'self'", 'blob:', 'data:', 'https:'],
+  connectSrc: ["'self'", 'wss:', 'https://*.google.com', 'https://*.doubleclick.net', 'https://*.googlesyndication.com'],
+  frameSrc: ['https://googleads.g.doubleclick.net', 'https://*.googlesyndication.com', 'https://tpc.googlesyndication.com'],
+  mediaSrc: ["'self'", 'blob:'],
   styleSrc: ["'self'", 'https://fonts.googleapis.com'], fontSrc: ['https://fonts.gstatic.com'], workerSrc: ["'self'"], manifestSrc: ["'self'"] } } }));
 app.use((q, r, n) => { // صلاحيات المتصفح + حماية CSRF (أي طلب تعديل لازم يجي من نفس الموقع)
   r.set('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=(), payment=()');
   if (q.method !== 'GET' && q.method !== 'HEAD' && q.headers.origin && !sameOrigin(q.headers.origin, q.headers.host)) return r.sendStatus(403);
   n();
 });
-app.use(express.json({ limit: '20kb' }));
+const jsonSmall = express.json({ limit: '20kb' });
+app.use((q, r, n) => q.path === '/api/admin/guide/bulk' ? n() : jsonSmall(q, r, n)); // مسار الإضافة الجماعية للدليل له حد أكبر
 app.use('/api', (_q, r, n) => { r.set('Cache-Control', 'no-store'); n(); });
 
 const online = new Map(), calls = new Map(), answered = new Set(), timers = new Map(), hits = new Map(), xfer = new Map(), fails = new Map();
@@ -106,6 +112,32 @@ const notifyFrom = async (from, to, kind, text) => {
   } catch (e) { console.error(e); }
 };
 
+// بيانات أولية للدليل (بدون روابط، إلا المنصات الرسمية). عدّلها أو أضف عليها من لوحة الإدارة
+const SEED = [
+  ['series', 'باب الحارة', 'مسلسل سوري من البيئة الشامية، بيحكي حياة حارة دمشقية قديمة وعاداتها وأهلها. من أشهر مسلسلات رمضان بالعالم العربي.'],
+  ['series', 'ضيعة ضايعة', 'كوميديا سورية ساخرة عن حياة قرية ريفية بسيطة وشخصياتها، من إخراج الليث حجو.'],
+  ['series', 'الهيبة', 'دراما لبنانية سورية مشتركة بطولة تيم حسن، عن صراعات العائلات والنفوذ بمنطقة حدودية.'],
+  ['series', 'الاختيار', 'دراما مصرية بتتناول بطولات رجال الجيش والشرطة بمواجهة الإرهاب.'],
+  ['series', 'كلبش', 'دراما مصرية بوليسية وأكشن بطولة أمير كرارة، عن ضابط شرطة ومواجهاته مع الجريمة.'],
+  ['series', 'جعفر العمدة', 'دراما مصرية صعيدية بطولة محمد رمضان، فيها صراع وعائلات وتحديات.'],
+  ['series', 'الكبير أوي', 'كوميديا مصرية بطولة أحمد مكي، عن شخصية العمدة الكبير وعائلته بقرية صعيدية.'],
+  ['series', 'التغريبة الفلسطينية', 'دراما سورية بتتابع رحلة عائلة فلسطينية عبر عقود من التهجير والشتات. كتابة وليد سيف وإخراج حاتم علي.'],
+  ['series', 'الزير سالم', 'دراما تاريخية سورية عن قصة المهلهل وحرب البسوس، من إخراج حاتم علي.'],
+  ['series', 'صقر قريش', 'دراما تاريخية سورية عن حياة عبد الرحمن الداخل وتأسيسه للدولة الأموية بالأندلس.'],
+  ['series', 'ليالي الحلمية', 'دراما مصرية اجتماعية من تأليف أسامة أنور عكاشة، بتتابع عائلات حي الحلمية عبر سنوات طويلة.'],
+  ['series', 'رأفت الهجان', 'دراما مصرية عن قصة جاسوس مصري داخل إسرائيل، بطولة محمود عبد العزيز.'],
+  ['series', 'أرابيسك', 'دراما مصرية من تأليف أسامة أنور عكاشة بطولة صلاح السعدني، عن صانع أرابيسك وتحولات المجتمع.'],
+  ['series', 'مرايا', 'لوحات سورية ساخرة منفصلة عن المجتمع والحياة اليومية، بطولة ياسر العظمة.'],
+  ['series', 'بقعة ضوء', 'سلسلة لوحات سورية ساخرة بتناقش قضايا اجتماعية بأسلوب كوميدي.'],
+  ['series', 'الحشاشين', 'دراما تاريخية مصرية عن طائفة الحشاشين وحسن الصباح، بطولة كريم عبد العزيز.'],
+  ['series', 'العاصوف', 'دراما سعودية بطولة ناصر القصبي، بتصوّر الحياة الاجتماعية بالبيئة السعودية القديمة.'],
+  ['series', 'طاش ما طاش', 'مسلسل سعودي كوميدي اجتماعي ناقد، بطولة ناصر القصبي وعبدالله السدحان.'],
+  ['series', 'سيلفي', 'مسلسل سعودي كوميدي بلوحات اجتماعية منفصلة.'],
+  ['apps', 'شاهد', 'منصة بث رسمية بتعرض مسلسلات وأفلام عربية وعالمية.', 'https://shahid.mbc.net/'],
+  ['apps', 'نتفليكس', 'منصة بث رسمية عالمية فيها مسلسلات وأفلام بترجمة عربية.', 'https://www.netflix.com/'],
+  ['apps', 'يوتيوب', 'منصة الفيديو الرسمية. كثير من القنوات الرسمية بتنشر حلقات ومقاطع بشكل قانوني.', 'https://www.youtube.com/']
+];
+
 async function init() {
   await db.query(`create table if not exists accounts(id serial primary key, num text unique, pass_hash text not null,
     device text, claimed_at timestamptz, created_at timestamptz default now());
@@ -136,7 +168,14 @@ async function init() {
     create table if not exists reports(id serial primary key, from_id int not null, to_id int not null, reason text,
     created_at timestamptz default now());
     alter table reports add column if not exists evidence text;
+    create table if not exists guide_items(id serial primary key, kind text not null check (kind in ('series','apps')),
+    title text not null, descr text not null default '', link text not null default '', created_at timestamptz default now());
+    create unique index if not exists guide_uniq on guide_items(kind, lower(title));
+    create index if not exists guide_kind on guide_items(kind, id desc);
     create table if not exists settings(k text primary key, v text not null)`);
+  if (!(await db.query('select 1 from guide_items limit 1')).rowCount) // أول تشغيل: نعبّي الدليل بالبيانات الأولية
+    await db.query('insert into guide_items(kind,title,descr,link) select * from unnest($1::text[],$2::text[],$3::text[],$4::text[]) on conflict do nothing',
+      [SEED.map(x => x[0]), SEED.map(x => x[1]), SEED.map(x => x[2]), SEED.map(x => x[3] || '')]);
   if (!SECRET) { // إذا ما حطيت SECRET بالبيئة، بنخزّنه بقاعدة البيانات عشان ما يتغيّر مع كل تشغيل
     await db.query("insert into settings(k,v) values('secret',$1) on conflict do nothing", [crypto.randomBytes(32).toString('hex')]);
     SECRET = (await db.query("select v from settings where k='secret'")).rows[0].v;
@@ -415,6 +454,37 @@ app.post('/api/admin/reset/:id', auth, async (q, r) => {
 });
 app.delete('/api/admin/reports/:id', auth, async (q, r) => { await db.query('delete from reports where id=$1', [idp(q.params.id)]); r.json({ ok: true }); });
 
+/* ---------- أربكس الدليل: مسارات الإدارة ---------- */
+const GK = new Set(['series', 'apps']);
+const httpsUrl = v => { try { const u = new URL(v); return u.protocol === 'https:' ? u.href : ''; } catch { return ''; } };
+app.post('/api/admin/guide', auth, async (q, r) => { // عنصر واحد
+  const { kind, title, descr, link } = q.body || {}, L = link ? httpsUrl(link) : '';
+  if (!GK.has(kind) || !str(title, 120) || (link && !L) || (descr != null && (typeof descr !== 'string' || descr.length > 500)))
+    return r.status(400).json({ error: 'بيانات غير صحيحة (الرابط لازم https)' });
+  const x = await db.query('insert into guide_items(kind,title,descr,link) values($1,$2,$3,$4) on conflict do nothing returning id',
+    [kind, title.trim(), (descr || '').trim(), L]);
+  r.json(x.rowCount ? { ok: true, id: x.rows[0].id } : { ok: false, error: 'موجود من قبل' });
+});
+app.post('/api/admin/guide/bulk', auth, express.json({ limit: '2mb' }), async (q, r) => { // إضافة جماعية (لحد 1000 عنصر)
+  const a = Array.isArray((q.body || {}).items) ? q.body.items.slice(0, 1000) : [];
+  const K = [], T = [], D = [], L = [];
+  for (const x of a) {
+    if (!x || !GK.has(x.kind) || !str(x.title, 120)) continue;
+    const l = x.link ? httpsUrl(x.link) : ''; if (x.link && !l) continue;
+    K.push(x.kind); T.push(x.title.trim()); D.push(String(x.descr || '').trim().slice(0, 500)); L.push(l);
+  }
+  if (!T.length) return r.status(400).json({ error: 'ما في عناصر صالحة' });
+  const x = await db.query('insert into guide_items(kind,title,descr,link) select * from unnest($1::text[],$2::text[],$3::text[],$4::text[]) on conflict do nothing', [K, T, D, L]);
+  r.json({ ok: true, n: x.rowCount, skipped: a.length - x.rowCount });
+});
+app.put('/api/admin/guide/:id', auth, async (q, r) => {
+  const id = idp(q.params.id), { kind, title, descr, link } = q.body || {}, L = link ? httpsUrl(link) : '';
+  if (!id || !GK.has(kind) || !str(title, 120) || (link && !L)) return r.status(400).json({ error: 'بيانات غير صحيحة' });
+  await db.query('update guide_items set kind=$1,title=$2,descr=$3,link=$4 where id=$5', [kind, title.trim(), String(descr || '').trim().slice(0, 500), L, id]);
+  r.json({ ok: true });
+});
+app.delete('/api/admin/guide/:id', auth, async (q, r) => { await db.query('delete from guide_items where id=$1', [idp(q.params.id)]); r.json({ ok: true }); });
+
 /* ---------- الاتصال المباشر (رسائل + إشارات المكالمات) ---------- */
 const endPair = (a, b) => {
   for (const x of [a, b]) { calls.delete(x); answered.delete(x); clearTimeout(timers.get(x)); timers.delete(x); }
@@ -489,6 +559,7 @@ const LOGO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><def
 <circle cx="64" cy="64" r="60" fill="#07050f" stroke="url(#g)" stroke-width="6"/>
 <path d="M38 36h52a12 12 0 0 1 12 12v30a12 12 0 0 1-12 12H72L56 106V90H38a12 12 0 0 1-12-12V48a12 12 0 0 1 12-12z" fill="none" stroke="url(#g)" stroke-width="5" stroke-linejoin="round"/>
 <rect x="60" y="52" width="8" height="30" rx="4" fill="#ffc83d"/><path d="M58 45l12-5" stroke="#ffc83d" stroke-width="5" stroke-linecap="round"/></svg>`;
+const SEARCH_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>';
 const MANIFEST = JSON.stringify({ name: 'عبدالله ابو ناقوس', short_name: 'عبدالله', start_url: '/', display: 'standalone', dir: 'rtl', lang: 'ar',
   background_color: '#07050f', theme_color: '#07050f', icons: [{ src: '/logo.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }] });
 
@@ -511,7 +582,7 @@ const HTML = `<!doctype html>
      crossorigin="anonymous"></script>
 <meta name="theme-color" content="#07050f"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
 <title>عبدالله ابو ناقوس</title>
-<meta name="description" content="عبدالله ابو ناقوس">
+<meta name="description" content="عبدالله ابو ناقوس: دردشة ومكالمات بين الأعضاء، وأربكس الدليل لمسلسلات وتطبيقات">
 <meta property="og:site_name" content="عبدالله ابو ناقوس"><meta property="og:title" content="عبدالله ابو ناقوس"><meta property="og:description" content="عبدالله ابو ناقوس">
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"عبدالله ابو ناقوس","alternateName":"عبدالله ابو ناقوس","url":"https://bdllh-nqws-1.onrender.com/"}</script>
 <link rel="icon" href="/logo.svg" type="image/svg+xml"><link rel="manifest" href="/manifest.json">
@@ -526,6 +597,7 @@ const HTML = `<!doctype html>
   <p class="sub">دردشة ومكالمات حقيقية بين الأعضاء.</p>
   <a class="ig" href="https://www.instagram.com/bdllh.nqws" target="_blank" rel="noopener noreferrer">تابعني على انستجرام</a>
   <div class="links">
+    <a class="gl" href="/guide" aria-label="بحث في أربكس الدليل">${SEARCH_ICON}<span>أربكس الدليل</span></a>
     <a href="https://www.instagram.com/rbkslbrmjh" target="_blank" rel="noopener noreferrer">انستجرام أربكس البرمجة</a>
     <a href="https://arb-ai-x.github.io/arabesque-de/" target="_blank" rel="noopener noreferrer">موقع أربكس البرمجة</a>
   </div>
@@ -551,7 +623,8 @@ const HTML = `<!doctype html>
 </section>
 <section id="app" hidden>
   <aside>
-    <div class="top"><div class="brand"><img src="/logo.svg" alt="" width="34" height="34"><span>عبدالله ابو ناقوس</span></div><button id="gear">الإعدادات</button></div>
+    <div class="top"><div class="brand"><img src="/logo.svg" alt="" width="34" height="34"><span>عبدالله ابو ناقوس</span></div>
+      <a class="sbtn" href="/guide" aria-label="بحث في أربكس الدليل" title="أربكس الدليل">${SEARCH_ICON}</a><button id="gear">الإعدادات</button></div>
     <button id="me" class="meb"><span id="meav"></span><b id="myname"></b></button>
     <div class="tabs"><button type="button" id="tc" class="tab on">المحادثات</button><button type="button" id="tst" class="tab">الحالات</button></div>
     <div id="onc"></div>
@@ -599,13 +672,17 @@ const HTML = `<!doctype html>
   <h4>الحساب</h4><button id="out" class="alt">تبديل الحساب / خروج</button></dialog>
 <footer><div class="foot">
   <p>تم إنشاء الموقع بواسطة <a href="https://www.instagram.com/bdllh.nqws" target="_blank" rel="noopener noreferrer">عبدالله ابو ناقوس</a></p>
-  <p><a href="https://www.instagram.com/rbkslbrmjh" target="_blank" rel="noopener noreferrer">انستجرام أربكس البرمجة</a> ·
+  <p><a href="/guide">أربكس الدليل</a> ·
+     <a href="https://www.instagram.com/rbkslbrmjh" target="_blank" rel="noopener noreferrer">انستجرام أربكس البرمجة</a> ·
      <a href="https://arb-ai-x.github.io/arabesque-de/" target="_blank" rel="noopener noreferrer">موقع أربكس البرمجة</a></p>
   <p class="rules">للأعضاء 18 سنة فأكثر فقط. ممنوع الإساءة والتحرش وانتحال الشخصية، وأي بلاغ بيتراجع.</p></div>
   <button id="dot" aria-label="."></button></footer>
 <dialog id="admin"><form method="dialog"><button>إغلاق</button></form>
 <form id="alogin"><input type="password" id="pw" placeholder="كلمة السر" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false"><button>دخول</button><p id="amsg" role="status"></p></form>
-<div id="panel" hidden><h3>البلاغات</h3><div class="scroll"><table id="reps"></table></div>
+<div id="panel" hidden>
+<h3>إضافة للدليل</h3><p class="hintp">كل سطر: النوع (مسلسل أو تطبيق) | العنوان | الشرح | رابط رسمي https (اختياري)</p>
+<textarea id="gbulk" rows="6" placeholder="مسلسل | اسم المسلسل | شرح قصير عن القصة"></textarea><button type="button" id="gadd">إضافة</button><p id="gmsg" role="status"></p>
+<h3>البلاغات</h3><div class="scroll"><table id="reps"></table></div>
 <h3>الحسابات <small id="cnt"></small></h3><div class="scroll"><table id="accs"></table></div></div></dialog>
 <script src="/socket.io/socket.io.js"></script><script src="/app.js"></script></body></html>`;
 
@@ -637,6 +714,7 @@ h1{font:clamp(3rem,13vw,7rem)/1.05 Lalezar,sans-serif;margin:4px 0 8px;backgroun
 .links{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-bottom:12px}
 .links a{padding:8px 18px;border-radius:40px;border:1px solid #ffffff33;background:#ffffff0d;color:var(--p);text-decoration:none;font-weight:700;font-size:.95rem}
 .links a:hover{border-color:var(--c);color:var(--c)}
+.links a.gl{display:inline-flex;gap:8px;align-items:center;border-color:var(--c);color:var(--c)}
 .glass{background:#ffffff0d;border:1px solid #ffffff22;backdrop-filter:blur(14px);border-radius:22px;padding:18px;width:min(380px,100%);margin:8px 0}
 .glass form{margin:0}
 .chk{display:flex;gap:8px;align-items:center;justify-content:center;margin-bottom:12px;font-size:.95rem}
@@ -658,6 +736,7 @@ body.in footer{display:none}
 aside{border-inline-end:1px solid #ffffff1f;display:flex;flex-direction:column;min-height:0;background:#0b0818cc;padding:10px}
 .top{display:flex;align-items:center;gap:8px;margin-bottom:6px}.top button{padding:6px 12px;font-size:.85rem}
 .brand{flex:1;display:flex;align-items:center;gap:8px;font:1.5rem/1.2 Lalezar,sans-serif;color:var(--g)}
+.sbtn{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:50%;background:#ffffff18;color:var(--c);flex:none}.sbtn:hover{background:#ffffff2a}
 .meb{display:flex;align-items:center;gap:8px;width:100%;background:#ffffff0d;color:var(--p);margin-bottom:8px;padding:6px 10px;text-align:start}
 #onc{font-size:.85rem;color:#2ee6a0;margin-bottom:6px}
 .pane{flex:1;min-height:0;display:flex;flex-direction:column}
@@ -712,6 +791,21 @@ dialog::backdrop{background:#000b}.scroll{overflow-x:auto}
 #st,#stc{width:min(460px,94vw)}#st h4{margin:16px 0 8px;color:var(--g)}#st label{display:block;margin-bottom:6px;font-size:.9rem}
 #xf{text-align:center;width:min(380px,94vw)}#xcode{display:block;font-size:2.2rem;letter-spacing:.3em;color:var(--g);margin:10px 0}
 table{width:100%;border-collapse:collapse;font-size:.9rem}td,th{padding:6px 8px;border-bottom:1px solid #2c2250;text-align:right}td button{padding:4px 10px;margin-inline-start:4px}
+.gw{max-width:960px;margin:0 auto;padding:18px}
+.gh{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+.gb{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--g);font:2rem/1.2 Lalezar,sans-serif}
+.lnk2{padding:8px 16px;border-radius:40px;border:1px solid #ffffff33;background:#ffffff0d;color:var(--p);text-decoration:none;font-weight:700}
+.gw h1{font-size:clamp(2rem,7vw,3.2rem);margin:6px 0 4px}.gw h2{margin:18px 0 8px;color:var(--g)}
+.gs{display:flex;gap:8px;align-items:center;margin:12px 0}.gs input,.gs select{margin:0}.gs input{flex:1}.gs select{width:auto}
+.gs button{padding:11px 14px;display:inline-grid;place-items:center}
+.gt{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.gt a{padding:6px 16px;border-radius:40px;background:#ffffff14;color:var(--p);text-decoration:none;font-weight:700}.gt a.on{background:linear-gradient(135deg,var(--c),var(--b2));color:#06111a}
+.gg{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.gc{display:flex;flex-direction:column;gap:4px;padding:14px;border-radius:18px;background:#ffffff0d;border:1px solid #ffffff22;text-decoration:none;color:var(--p)}
+.gc:hover{border-color:var(--c)}.gc b{font-size:1.1rem;color:var(--g)}.gc small{color:var(--c)}.gc p{margin:0;font-size:.9rem;color:#d8cdf5}
+.gd{background:#ffffff0d;border:1px solid #ffffff22;border-radius:22px;padding:22px}.gd p{font-size:1.1rem}
+.go{display:inline-block;padding:11px 24px;border-radius:14px;background:linear-gradient(135deg,var(--c),var(--b2));color:#06111a;font-weight:700;text-decoration:none}
+.gp{display:flex;justify-content:center;gap:12px;margin:18px 0}.gp a{padding:8px 18px;border-radius:40px;background:#ffffff14;color:var(--p);text-decoration:none;font-weight:700}
+.gf{text-align:center;color:#b9aedd;font-size:.85rem;margin:26px 0 10px}.gf a{color:var(--g)}
 @media (max-width:700px){#app{grid-template-columns:1fr}body.chatting aside{display:none}body:not(.chatting) #chat{display:none}#back{display:block}.m{max-width:85%}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important}h1{color:var(--g);background:none}}`;
 
@@ -945,6 +1039,11 @@ async function adm(){const d=await api('/admin/data');$('#cnt').textContent='('+
     b.onclick=safe(async()=>{await api('/admin/ban/'+x.id,'POST',{on:!x.banned});await adm()});
     rs.onclick=safe(async()=>{if(!confirm('إعادة ضبط '+x.username+'؟'))return;const r=await api('/admin/reset/'+x.id,'POST');alert(x.username+' : '+r.pass);await adm()});
     t.append(b,rs);ac2.append(row([x.username,x.name,x.banned?'محظور':(x.claimed_at?'مستخدم':'متاح')],t))})}
+$('#gadd').onclick=safe(async()=>{
+  const items=$('#gbulk').value.split(/\\n/).map(l=>l.trim()).filter(Boolean).map(l=>{const p=l.split('|').map(x=>x.trim());
+    return {kind:/^(تطبيق|apps)$/i.test(p[0])?'apps':'series',title:p[1],descr:p[2],link:p[3]}});
+  if(!items.length)throw new Error('اكتب سطر واحد على الأقل');
+  const r=await api('/admin/guide/bulk','POST',{items});$('#gmsg').textContent='تمت إضافة '+r.n+' (المكرر: '+r.skipped+')';$('#gbulk').value=''});
 let clicks=0,timer;
 $('#dot').addEventListener('click',()=>{clearTimeout(timer);timer=setTimeout(()=>clicks=0,3000);if(++clicks>=10){clicks=0;$('#admin').showModal()}});
 $('#alogin').addEventListener('submit',async e=>{e.preventDefault();
@@ -958,12 +1057,73 @@ app.get('/sw.js', (_q, r) => r.type('js').set('Cache-Control', 'no-cache').send(
 app.get('/manifest.json', (_q, r) => r.type('application/manifest+json').send(MANIFEST));
 app.get('/logo.svg', (_q, r) => r.type('image/svg+xml').set('Cache-Control', 'public, max-age=86400').send(LOGO));
 
-/* ---------- ملفات جوجل: التحقق + robots + sitemap (إضافة) ---------- */
+/* ---------- أربكس الدليل: صفحات عامة (بتنعرض من السيرفر عشان جوجل يفهرسها) ---------- */
 const SITE = 'https://bdllh-nqws-1.onrender.com';
+const GKN = { series: 'مسلسل', apps: 'تطبيق' };
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const shell = (title, desc, path, body, ld) => `<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)}</title><meta name="description" content="${esc(desc)}">
+<link rel="canonical" href="${SITE}${path}">
+<meta property="og:site_name" content="أربكس الدليل"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(desc)}">
+<meta property="og:type" content="website"><meta property="og:url" content="${SITE}${path}"><meta name="theme-color" content="#07050f">
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9488040294768764" crossorigin="anonymous"></script>
+${ld ? '<script type="application/ld+json">' + JSON.stringify(ld).replace(/</g, '\\u003c') + '</script>' : ''}
+<link rel="icon" href="/logo.svg" type="image/svg+xml"><link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&family=Lalezar&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css"></head><body>
+<div class="bg" aria-hidden="true"><i></i><i></i></div>
+<main class="gw"><header class="gh"><a class="gb" href="/guide"><img src="/logo.svg" alt="" width="44" height="44"><span>أربكس الدليل</span></a><a class="lnk2" href="/">الدردشة</a></header>
+${body}
+<footer class="gf">تم إنشاء الموقع بواسطة <a href="https://www.instagram.com/bdllh.nqws" target="_blank" rel="noopener noreferrer">عبدالله ابو ناقوس</a></footer></main></body></html>`;
+const card = x => `<a class="gc" href="/guide/${x.id}"><b>${esc(x.title)}</b><small>${GKN[x.kind] || ''}</small><p>${esc(String(x.descr || '').slice(0, 110))}</p></a>`;
+
+app.get('/guide', lim(120, 10), async (q, r) => {
+  const t = GK.has(String(q.query.type)) ? String(q.query.type) : '', s = String(q.query.q || '').trim().slice(0, 40);
+  const pg = Math.max(1, Math.min(500, parseInt(q.query.p, 10) || 1)), w = [], p = [];
+  if (t) { p.push(t); w.push('kind=$' + p.length); }
+  if (s) { p.push('%' + s.replace(/[%_\\]/g, '\\$&') + '%'); w.push('(title ilike $' + p.length + ' or descr ilike $' + p.length + ')'); }
+  const W = w.length ? 'where ' + w.join(' and ') : '';
+  const tot = (await db.query('select count(*)::int c from guide_items ' + W, p)).rows[0].c;
+  const rows = (await db.query(`select id,kind,title,descr from guide_items ${W} order by id desc limit 60 offset ${(pg - 1) * 60}`, p)).rows;
+  const qs = o => '/guide?' + new URLSearchParams({ q: s, type: t, ...o }).toString();
+  const tab = (k, n) => `<a href="${qs({ type: k, p: 1 })}"${t === k ? ' class="on"' : ''}>${n}</a>`;
+  const body = `<h1>أربكس الدليل</h1><p class="sub">دليل المسلسلات والتطبيقات: ابحث واقرأ الشرح عن كل عمل.</p>
+<form class="gs" action="/guide" method="get" role="search"><input name="q" value="${esc(s)}" placeholder="ابحث عن مسلسل أو تطبيق" maxlength="40" aria-label="بحث">
+<input type="hidden" name="type" value="${esc(t)}"><button aria-label="بحث">${SEARCH_ICON}</button></form>
+<nav class="gt">${tab('', 'الكل')}${tab('series', 'مسلسلات')}${tab('apps', 'تطبيقات')}</nav>
+${rows.length ? '<div class="gg">' + rows.map(card).join('') + '</div>' : '<p class="mut">ما في نتائج.</p>'}
+<div class="gp">${pg > 1 ? `<a href="${qs({ p: pg - 1 })}">السابق</a>` : ''}${tot > pg * 60 ? `<a href="${qs({ p: pg + 1 })}">التالي</a>` : ''}</div>`;
+  r.type('html').send(shell(s ? 'نتائج ' + s + ' | أربكس الدليل' : 'أربكس الدليل | دليل المسلسلات والتطبيقات',
+    'أربكس الدليل: دليل عربي للمسلسلات (مسلسلات رمضان وغيرها) والتطبيقات مع شرح لكل عمل.', '/guide', body,
+    { '@context': 'https://schema.org', '@type': 'WebSite', name: 'أربكس الدليل', url: SITE + '/guide',
+      potentialAction: { '@type': 'SearchAction', target: SITE + '/guide?q={search_term_string}', 'query-input': 'required name=search_term_string' } }));
+});
+app.get('/guide/:id', lim(120, 10), async (q, r) => {
+  const id = idp(q.params.id), x = id ? (await db.query('select * from guide_items where id=$1', [id])).rows[0] : null;
+  if (!x) return r.status(404).type('html').send(shell('غير موجود | أربكس الدليل', 'الصفحة غير موجودة', '/guide', '<p class="mut">ما لقينا هالصفحة. <a href="/guide">رجوع للدليل</a></p>'));
+  const more = (await db.query('select id,kind,title,descr from guide_items where kind=$1 and id<>$2 order by id desc limit 6', [x.kind, id])).rows;
+  const d = x.descr || (GKN[x.kind] + ' ' + x.title + ' ضمن أربكس الدليل');
+  const body = `<article class="gd"><small>${GKN[x.kind]}</small><h1>${esc(x.title)}</h1><p>${esc(d)}</p>
+${x.link ? `<a class="go" href="${esc(x.link)}" target="_blank" rel="noopener noreferrer nofollow">فتح الرابط الرسمي</a>` : ''}</article>
+${more.length ? '<h2>غيرها بالدليل</h2><div class="gg">' + more.map(card).join('') + '</div>' : ''}
+<div class="gp"><a href="/guide">رجوع للدليل</a></div>`;
+  r.type('html').send(shell(x.title + ' | أربكس الدليل', d.slice(0, 160), '/guide/' + id, body,
+    { '@context': 'https://schema.org', '@type': 'WebPage', name: x.title, description: d.slice(0, 300), url: SITE + '/guide/' + id,
+      isPartOf: { '@type': 'WebSite', name: 'أربكس الدليل', url: SITE + '/guide' } }));
+});
+
+/* ---------- ملفات جوجل: التحقق + robots + sitemap (فيه صفحات الدليل كلها) ---------- */
 app.get('/google420c58aff5210570.html', (_q, r) => r.type('html').send('google-site-verification: google420c58aff5210570.html'));
 app.get('/robots.txt', (_q, r) => r.type('text/plain').send('User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: ' + SITE + '/sitemap.xml\n'));
-app.get('/sitemap.xml', (_q, r) => r.type('application/xml').send(
-  '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>' + SITE + '/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>\n</urlset>\n'));
+app.get('/sitemap.xml', async (_q, r) => {
+  const ids = (await db.query('select id from guide_items order by id limit 40000')).rows;
+  r.type('application/xml').send('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+    + '  <url><loc>' + SITE + '/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>\n'
+    + '  <url><loc>' + SITE + '/guide</loc><changefreq>daily</changefreq><priority>0.9</priority></url>\n'
+    + ids.map(x => '  <url><loc>' + SITE + '/guide/' + x.id + '</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>\n').join('')
+    + '</urlset>\n');
+});
 
 app.use((e, _q, r, _n) => {
   console.error(e); const s = e.status >= 400 && e.status < 500 ? e.status : 500;
