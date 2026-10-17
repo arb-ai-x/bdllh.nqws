@@ -172,7 +172,9 @@ async function init() {
     title text not null, descr text not null default '', link text not null default '', created_at timestamptz default now());
     create unique index if not exists guide_uniq on guide_items(kind, lower(title));
     create index if not exists guide_kind on guide_items(kind, id desc);
-    create table if not exists settings(k text primary key, v text not null)`);
+    create table if not exists settings(k text primary key, v text not null);
+    create table if not exists ai_usage(acc int not null, day date not null default current_date, chats int not null default 0,
+    images int not null default 0, primary key(acc, day))`);
   if (!(await db.query('select 1 from guide_items limit 1')).rowCount) // أول تشغيل: نعبّي الدليل بالبيانات الأولية
     await db.query('insert into guide_items(kind,title,descr,link) select * from unnest($1::text[],$2::text[],$3::text[],$4::text[]) on conflict do nothing',
       [SEED.map(x => x[0]), SEED.map(x => x[1]), SEED.map(x => x[2]), SEED.map(x => x[3] || '')]);
@@ -422,6 +424,60 @@ app.post('/api/block', member, async (q, r) => {
   await db.query('insert into blocks(a,b) values($1,$2) on conflict do nothing', [q.acc.id, to]); r.json({ ok: true });
 });
 
+/* ---------- الذكاء الاصطناعي (Gemini): المفتاح من متغيرات Render فقط ---------- */
+const GKEY = process.env.GEMINI_API_KEY || '';
+const GMODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+const GIMG = process.env.GEMINI_IMAGE_MODEL || ''; // فاضي = توليد الصور مقفل
+const AI_CHATS = +process.env.AI_CHATS_PER_DAY || 20, AI_IMGS = +process.env.AI_IMAGES_PER_DAY || 3;
+const AI_SYS = 'أنت أربكس AI، مساعد ودود داخل موقع عبدالله ابو ناقوس. جاوب بالعربي بلهجة بسيطة ومفهومة وباختصار، إلا إذا طلب المستخدم تفصيل. ما تكتب محتوى جنسي أو عنيف أو مسيء، وما تساعد بالاحتيال أو انتحال الشخصيات أو أي شي مؤذي. إذا ما عرفت الجواب قول ما بعرف.';
+const aiUse = async (id, col, max) => (await db.query(`insert into ai_usage(acc,day,${col}) values($1,current_date,1)
+  on conflict(acc,day) do update set ${col}=ai_usage.${col}+1 where ai_usage.${col}<$2 returning ${col}`, [id, max])).rowCount > 0;
+const aiRefund = (id, col) => db.query(`update ai_usage set ${col}=greatest(${col}-1,0) where acc=$1 and day=current_date`, [id]).catch(() => {});
+const gem = async (model, body) => {
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), 45000);
+  try {
+    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent',
+      { method: 'POST', signal: ac.signal, headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GKEY }, body: JSON.stringify(body) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { const e = new Error((d.error && d.error.message) || 'gemini'); e.code = res.status; throw e; }
+    return d;
+  } finally { clearTimeout(t); }
+};
+const aiErr = e => e.code === 429 ? 'الخدمة مشغولة أو وصلت حدها، جرّب بعد شوي' : 'صار خطأ بالذكاء الاصطناعي، جرّب مرة ثانية';
+app.get('/api/ai/info', member, (_q, r) => r.json({ on: !!GKEY, img: !!(GKEY && GIMG), chats: AI_CHATS, imgs: AI_IMGS }));
+app.post('/api/ai/chat', member, lim(12, 1), async (q, r) => {
+  if (!GKEY) return r.status(503).json({ error: 'الذكاء الاصطناعي مو مفعّل هلأ' });
+  const contents = [];
+  for (const m of (Array.isArray((q.body || {}).msgs) ? q.body.msgs.slice(-10) : [])) {
+    if (!m || (m.role !== 'user' && m.role !== 'ai') || !str(m.text, 1000)) continue;
+    if (!contents.length && m.role === 'ai') continue; // لازم تبدأ برسالة من العضو
+    contents.push({ role: m.role === 'ai' ? 'model' : 'user', parts: [{ text: m.text.trim() }] });
+  }
+  if (!contents.length || contents[contents.length - 1].role !== 'user') return r.status(400).json({ error: 'اكتب رسالة' });
+  if (!(await aiUse(q.acc.id, 'chats', AI_CHATS))) return r.status(429).json({ error: 'خلص حدّك اليومي (' + AI_CHATS + ' رسالة). جرّب بكرا' });
+  try {
+    const d = await gem(GMODEL, { systemInstruction: { parts: [{ text: AI_SYS }] }, contents, generationConfig: { maxOutputTokens: 2048, temperature: 0.7 } });
+    const c = d.candidates && d.candidates[0];
+    const text = c && c.content && c.content.parts ? c.content.parts.map(x => x.text || '').join('').trim() : '';
+    if (!text) { aiRefund(q.acc.id, 'chats'); return r.json({ text: 'ما قدرت أرد على هالطلب، جرّب صياغة ثانية' }); }
+    r.json({ text: text.slice(0, 4000) });
+  } catch (e) { aiRefund(q.acc.id, 'chats'); console.error('gemini chat:', e.code, e.message); r.status(502).json({ error: aiErr(e) }); }
+});
+app.post('/api/ai/image', member, lim(4, 1), async (q, r) => {
+  if (!GKEY || !GIMG) return r.status(503).json({ error: 'توليد الصور مو مفعّل هلأ' });
+  const pr = (q.body || {}).prompt;
+  if (!str(pr, 300)) return r.status(400).json({ error: 'اكتب وصف الصورة (حتى 300 حرف)' });
+  if (!(await aiUse(q.acc.id, 'images', AI_IMGS))) return r.status(429).json({ error: 'خلص حدّك اليومي للصور (' + AI_IMGS + '). جرّب بكرا' });
+  try {
+    const d = await gem(GIMG, { contents: [{ parts: [{ text: 'Create a safe, family-friendly image, no real people likeness: ' + pr.trim() }] }],
+      generationConfig: { responseModalities: ['TEXT', 'IMAGE'] } });
+    const ps = (d.candidates && d.candidates[0] && d.candidates[0].content && d.candidates[0].content.parts) || [];
+    const im = ps.map(x => x.inlineData || x.inline_data).find(x => x && x.data && /^image\/(png|jpeg|webp)$/.test(x.mimeType || x.mime_type || ''));
+    if (!im) { aiRefund(q.acc.id, 'images'); return r.status(422).json({ error: 'ما قدرت أرسم هالوصف، جرّب وصف ثاني' }); }
+    r.json({ img: 'data:' + (im.mimeType || im.mime_type) + ';base64,' + im.data });
+  } catch (e) { aiRefund(q.acc.id, 'images'); console.error('gemini image:', e.code, e.message); r.status(502).json({ error: aiErr(e) }); }
+});
+
 /* ---------- الإدارة ---------- */
 app.post('/api/admin/login', lim(8, 15), (q, r) => {
   const h = v => crypto.createHash('sha256').update(String(v).trim()).digest();
@@ -624,7 +680,7 @@ const HTML = `<!doctype html>
 <section id="app" hidden>
   <aside>
     <div class="top"><div class="brand"><img src="/logo.svg" alt="" width="34" height="34"><span>عبدالله ابو ناقوس</span></div>
-      <a class="sbtn" href="/guide" aria-label="بحث في أربكس الدليل" title="أربكس الدليل">${SEARCH_ICON}</a><button id="gear">الإعدادات</button></div>
+      <a class="sbtn" href="/guide" aria-label="بحث في أربكس الدليل" title="أربكس الدليل">${SEARCH_ICON}</a><button id="aib">أربكس AI</button><button id="gear">الإعدادات</button></div>
     <button id="me" class="meb"><span id="meav"></span><b id="myname"></b></button>
     <div class="tabs"><button type="button" id="tc" class="tab on">المحادثات</button><button type="button" id="tst" class="tab">الحالات</button></div>
     <div id="onc"></div>
@@ -651,6 +707,10 @@ const HTML = `<!doctype html>
   <textarea id="stt" maxlength="140" rows="3" placeholder="اكتب حالتك"></textarea>
   <div id="stsw" class="swr"></div>
   <div class="row"><button id="stpub">نشر</button><button id="stdel" class="alt">حذف حالتي</button><button id="stx" class="alt">إغلاق</button></div></dialog>
+<dialog id="ai"><div class="row"><h3>أربكس AI</h3><button id="aix" class="alt">إغلاق</button></div>
+  <div id="aim"></div>
+  <form id="aif"><input id="ait" maxlength="1000" autocomplete="off" placeholder="اسأل أي شي"><button>إرسال</button><button type="button" id="aii" class="alt" hidden>صورة</button></form>
+  <p id="aih" class="hintp" role="status"></p></dialog>
 <dialog id="st"><div class="row"><h3>الإعدادات</h3><button id="stclose" class="alt">إغلاق</button></div>
   <h4>ملفي</h4>
   <div class="row"><span id="stav"></span><label class="att">تغيير الصورة<input type="file" id="avf" accept="image/*" hidden></label><button type="button" id="avd" class="alt">حذف الصورة</button></div>
@@ -806,6 +866,7 @@ table{width:100%;border-collapse:collapse;font-size:.9rem}td,th{padding:6px 8px;
 .go{display:inline-block;padding:11px 24px;border-radius:14px;background:linear-gradient(135deg,var(--c),var(--b2));color:#06111a;font-weight:700;text-decoration:none}
 .gp{display:flex;justify-content:center;gap:12px;margin:18px 0}.gp a{padding:8px 18px;border-radius:40px;background:#ffffff14;color:var(--p);text-decoration:none;font-weight:700}
 .gf{text-align:center;color:#b9aedd;font-size:.85rem;margin:26px 0 10px}.gf a{color:var(--g)}
+#ai{width:min(560px,94vw)}#aim{max-height:50vh;overflow:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:10px}#aif{display:flex;gap:8px;align-items:center}#aif input{margin:0}#aif button{white-space:nowrap;padding:10px 14px}
 @media (max-width:700px){#app{grid-template-columns:1fr}body.chatting aside{display:none}body:not(.chatting) #chat{display:none}#back{display:block}.m{max-width:85%}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important}h1{color:var(--g);background:none}}`;
 
@@ -995,6 +1056,25 @@ $('#pn').onclick=safe(async()=>{$('#pmsg').textContent=await pushSub(true)});
 $('#pch').onclick=safe(async()=>{await api('/password','PUT',{old:$('#op').value,pass:$('#np').value});$('#op').value=$('#np').value='';alert('تم تغيير كلمة السر')});
 $('#out').onclick=async()=>{try{await api('/logout','POST')}catch(x){}location.reload()};
 
+/* الذكاء الاصطناعي */
+let aih=[],aiInfo=null,aiBusy=false;
+const aiAdd=(role,node)=>{const d=el('div','m'+(role==='user'?' me':''));d.append(node);$('#aim').append(d);$('#aim').scrollTop=1e9;return d};
+$('#aib').onclick=safe(async()=>{$('#ai').showModal();
+  if(!aiInfo){aiInfo=await api('/ai/info');$('#aii').hidden=!aiInfo.img;
+    $('#aih').textContent=aiInfo.on?'الحد اليومي: '+aiInfo.chats+' رسالة'+(aiInfo.img?' و '+aiInfo.imgs+' صور':''):'الذكاء الاصطناعي مو مفعّل هلأ'}});
+$('#aix').onclick=()=>$('#ai').close();
+$('#aif').onsubmit=async e=>{e.preventDefault();const v=$('#ait').value.trim();if(!v||aiBusy)return;aiBusy=true;$('#ait').value='';
+  aiAdd('user',el('span','',v));aih.push({role:'user',text:v});aih=aih.slice(-10);
+  const w=aiAdd('ai',el('span','','...'));
+  try{const d=await api('/ai/chat','POST',{msgs:aih});w.replaceChildren(el('span','',d.text));aih.push({role:'ai',text:d.text.slice(0,1000)})}
+  catch(x){w.replaceChildren(el('span','',x.message));aih.pop()}
+  aiBusy=false;$('#aim').scrollTop=1e9};
+$('#aii').onclick=async()=>{const v=$('#ait').value.trim();if(!v||aiBusy)return;aiBusy=true;$('#ait').value='';
+  aiAdd('user',el('span','','صورة: '+v));const w=aiAdd('ai',el('span','','جاري الرسم...'));
+  try{const d=await api('/ai/image','POST',{prompt:v});const i=el('img','pic');i.src=d.img;i.alt=v;i.onload=()=>{$('#aim').scrollTop=1e9};w.replaceChildren(i)}
+  catch(x){w.replaceChildren(el('span','',x.message))}
+  aiBusy=false};
+
 async function enter(){me=await api('/me');members=await api('/members');
   (await api('/unread')).forEach(u=>unread[u.from_id]=u.c);
   $('#land').hidden=true;$('#app').hidden=false;document.body.classList.add('in');$('#myname').textContent=me.name;meav();list();
@@ -1113,9 +1193,10 @@ ${more.length ? '<h2>غيرها بالدليل</h2><div class="gg">' + more.map(
       isPartOf: { '@type': 'WebSite', name: 'أربكس الدليل', url: SITE + '/guide' } }));
 });
 
-/* ---------- ملفات جوجل: التحقق + robots + sitemap (فيه صفحات الدليل كلها) ---------- */
+/* ---------- ملفات جوجل: التحقق + robots + ads.txt + sitemap (فيه صفحات الدليل كلها) ---------- */
 app.get('/google420c58aff5210570.html', (_q, r) => r.type('html').send('google-site-verification: google420c58aff5210570.html'));
 app.get('/robots.txt', (_q, r) => r.type('text/plain').send('User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: ' + SITE + '/sitemap.xml\n'));
+app.get('/ads.txt', (_q, r) => r.type('text/plain').send('google.com, pub-9488040294768764, DIRECT, f08c47fec0942fa0\n')); // ملف AdSense المطلوب
 app.get('/sitemap.xml', async (_q, r) => {
   const ids = (await db.query('select id from guide_items order by id limit 40000')).rows;
   r.type('application/xml').send('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
